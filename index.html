@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SmartShield – Night Mode Safety</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      --bg: #ffffff;
+      --panel: #f2f2f2;
+      --text: #222222;
+      --accent: #007bff;
+      --box: rgba(0, 0, 0, 0.2);
+      --input-bg: #ffffff;
+    }
+
+    :root[data-theme='dark'] {
+      --bg: #121212;
+      --panel: #1e1e1e;
+      --text: #f0f0f0;
+      --accent: #00bcd4;
+      --box: rgba(255, 255, 255, 0.1);
+      --input-bg: #2c2c2c;
+    }
+
+    body, html {
+      margin: 0; padding: 0;
+      height: 100%; font-family: 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--text);
+    }
+
+    #map { height: 100vh; width: 100%; }
+
+    #controls, #legend, #dropdown, #emergency {
+      position: fixed; background: var(--panel); color: var(--text);
+      padding: 12px; border-radius: 10px;
+      box-shadow: 0 0 20px var(--box); z-index: 1000; cursor: move;
+    }
+
+    #controls { top: 10px; left: 10px; width: 300px; }
+    #legend { bottom: 20px; right: 20px; }
+    #dropdown { bottom: 20px; left: 20px; width: 300px; }
+    #emergency { top: 10px; right: 10px; width: 250px; }
+
+    .box {
+      display: inline-block; width: 20px; height: 20px;
+      border: 1px solid #aaa; margin-right: 8px;
+    }
+
+    input, textarea, button {
+      width: 100%; margin-bottom: 10px; padding: 8px;
+      box-sizing: border-box; border-radius: 6px;
+      border: none; outline: none;
+    }
+
+    input, textarea {
+      background: var(--input-bg); color: var(--text);
+    }
+
+    button {
+      background: var(--accent); color: white;
+      font-weight: bold; transition: 0.3s ease;
+    }
+
+    button:hover { background: #028fa1; }
+
+    .collapsible {
+      background-color: var(--input-bg); color: var(--text);
+      cursor: pointer; padding: 10px; border: none;
+      border-radius: 5px; width: 100%; text-align: left;
+      font-weight: bold; margin-top: 5px;
+    }
+
+    .collapsible::after { content: ' \25BC'; float: right; }
+    .active::after { content: ' \25B2'; }
+
+    .content {
+      display: none; overflow: hidden;
+      margin-top: 5px; padding-left: 10px;
+    }
+
+    h3, h4 { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="controls">
+    <input type="text" id="start" placeholder="Start (e.g., Hyderabad)">
+    <input type="text" id="destination" placeholder="Destination (e.g., Warangal)">
+    <button onclick="calculateRoute()">📍 Plot Safe Route</button>
+    <button onclick="toggleTheme()">🌗 Toggle Theme</button>
+  </div>
+
+  <div id="emergency">
+    <h4>⚠ Emergency Hotlines</h4>
+    <ul>
+      <li>🚓 Police: 100</li>
+      <li>🚑 Ambulance: 102</li>
+      <li>✨ Women Helpline: 1091</li>
+    </ul>
+    <h4>🚨 Live Incidents</h4>
+    <ul id="incidents" style="display: none;">
+      <li>Waiting for route input...</li>
+    </ul>
+  </div>
+
+  <div id="dropdown">
+    <button class="collapsible">🔔 Safety Info</button>
+    <div class="content">
+      <button class="collapsible">💬 Feedback</button>
+      <div class="content">
+        <input type="text" id="place" placeholder="Place Name">
+        <input type="number" id="rating" min="1" max="100" placeholder="Rating (1-100)">
+        <textarea id="comment" placeholder="Your comment"></textarea>
+        <button onclick="submitFeedback()">✉ Submit Feedback</button>
+      </div>
+      <button class="collapsible">🔍 Route Insights</button>
+      <div class="content">
+        <div id="greenDist">Low (Green): -</div>
+        <div id="yellowDist">Medium (Yellow): -</div>
+        <div id="redDist">High (Red): -</div>
+        <div id="totalDist">Total Distance: -</div>
+        <div id="altDist">Alternate Route: -</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="legend">
+    <h4>✨ Crime Zone Legend</h4>
+    <div><span class="box" style="background:red;"></span> High Crime Area</div>
+    <div><span class="box" style="background:yellow;"></span> Medium Crime Area</div>
+    <div><span class="box" style="background:green;"></span> Low Crime Area</div>
+    <div><span class="box" style="background:purple;"></span> Alternate Route</div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    let map = L.map('map').setView([17.385, 78.4867], 13);
+    let currentTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', currentTheme);
+
+    const tileLayers = {
+      light: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }),
+      dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap, CartoDB'
+      })
+    };
+
+    tileLayers[currentTheme].addTo(map);
+
+    const crimeColors = { low: "green", medium: "yellow", high: "red" };
+    const simulatedCrimeZones = ["low", "medium", "high", "medium", "low"];
+    let polylines = [], incidentInterval = null;
+
+    function clearPolylines() {
+      polylines.forEach(p => map.removeLayer(p));
+      polylines = [];
+    }
+
+    function drawSegments(coords, isAlt = false) {
+      const chunk = Math.floor(coords.length / simulatedCrimeZones.length);
+      let dist = { low:0, medium:0, high:0 }, total = 0;
+      coords.slice(0, -1).forEach((pt, i) => {
+        const nxt = coords[i+1], zone = simulatedCrimeZones[Math.floor(i/chunk)],
+              color = isAlt ? "purple" : crimeColors[zone],
+              seg = L.polyline([pt, nxt], { color, weight: 6, opacity: 1 }).addTo(map);
+        polylines.push(seg);
+        const d = map.distance(pt, nxt)/1000;
+        total += d;
+        if (!isAlt) dist[zone] += d;
+      });
+
+      if (isAlt) document.getElementById("altDist").textContent = `Alternate Route: ${total.toFixed(2)} km`;
+      else {
+        document.getElementById("greenDist").textContent = `Low (Green): ${dist.low.toFixed(2)} km`;
+        document.getElementById("yellowDist").textContent = `Medium (Yellow): ${dist.medium.toFixed(2)} km`;
+        document.getElementById("redDist").textContent = `High (Red): ${dist.high.toFixed(2)} km`;
+        document.getElementById("totalDist").textContent = `Total Distance: ${(dist.low + dist.medium + dist.high).toFixed(2)} km`;
+      }
+    }
+
+    async function calculateRoute() {
+      const s = document.getElementById("start").value.trim(),
+            t = document.getElementById("destination").value.trim();
+      if (!s || !t) return alert("Enter both start and destination");
+
+      const [res1, res2] = await Promise.all([
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(s)}`),
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(t)}`)
+      ]);
+      const [sd, td] = await Promise.all([res1.json(), res2.json()]);
+      if (!sd.length || !td.length) return alert("Location not found");
+
+      const start = [+sd[0].lat, +sd[0].lon], end = [+td[0].lat, +td[0].lon];
+      clearPolylines(); map.fitBounds([start, end]);
+
+      const routeURL = `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&alternatives=true&geometries=geojson`;
+      const json = await (await fetch(routeURL)).json();
+      if (!json.routes?.length) return alert("Route not found");
+
+      json.routes.forEach((r, i) => drawSegments(r.geometry.coordinates.map(c => [c[1], c[0]]), i > 0));
+      startLiveIncidents();
+    }
+
+    function startLiveIncidents() {
+      const incidentList = document.getElementById("incidents");
+      incidentList.style.display = "block";
+
+      const randomIncidents = [
+        "🔫 Robbery reported near park",
+        "🚨 Suspicious activity spotted in downtown",
+        "🧨 Bomb threat at city mall (unverified)",
+        "🚔 Police pursuit ongoing on Highway 44",
+        "💥 Loud noise complaint in residential area",
+        "👀 Stranger following people at metro station",
+        "🪧 Protest disrupting traffic at university junction",
+        "🚫 Unidentified bag found near bus stop",
+        "🔥 Fire outbreak in an abandoned building",
+        "👮 Curfew imposed temporarily in Zone 3"
+      ];
+
+      if (incidentInterval) clearInterval(incidentInterval);
+      incidentInterval = setInterval(() => {
+        const shuffle = arr => arr.sort(() => 0.5 - Math.random());
+        const [i1, i2] = shuffle(randomIncidents);
+        incidentList.innerHTML = `<li>${i1}</li><li>${i2}</li>`;
+      }, 5000);
+    }
+
+    function submitFeedback() {
+      const place = document.getElementById("place").value.trim(),
+            rating = document.getElementById("rating").value.trim(),
+            comment = document.getElementById("comment").value.trim();
+      if (!place || !rating || !comment) return alert("Complete all fields to submit feedback.");
+      alert(`✨ Feedback Submitted:\n• Place: ${place}\n• Rating: ${rating}/100\n• Comment: ${comment}`);
+    }
+
+    function toggleTheme() {
+      currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', currentTheme);
+      map.eachLayer(layer => {
+        if (layer instanceof L.TileLayer) map.removeLayer(layer);
+      });
+      tileLayers[currentTheme].addTo(map);
+    }
+
+    function makeDraggable(el) {
+      el.onmousedown = e => {
+        const ox = e.clientX - el.offsetLeft, oy = e.clientY - el.offsetTop;
+        document.onmousemove = e => {
+          el.style.left = (e.clientX - ox) + "px";
+          el.style.top = (e.clientY - oy) + "px";
+        };
+        document.onmouseup = () => document.onmousemove = null;
+      };
+    }
+
+    window.onload = () => {
+      ['controls', 'legend', 'dropdown', 'emergency'].forEach(id => makeDraggable(document.getElementById(id)));
+      [...document.getElementsByClassName("collapsible")].forEach(btn => {
+        btn.onclick = function() {
+          this.classList.toggle("active");
+          const content = this.nextElementSibling;
+          content.style.display = content.style.display === "block" ? "none" : "block";
+        };
+      });
+    };
+  </script>
+</body>
+</html>

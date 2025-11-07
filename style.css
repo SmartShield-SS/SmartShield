@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Crime-Aware Route Mapping</title>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA6B7vmlJq_H0Nh-ij-72g-MNK6k4UsF_Y&libraries=places,geometry"></script>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: Arial; }
+        #map { height: 100%; width: 100%; }
+
+        #controls, #legend, #distanceBox {
+            position: fixed;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.3);
+            z-index: 10;
+            cursor: move;
+        }
+        #controls { top: 10px; left: 10px; width: 300px; }
+        #legend { bottom: 20px; right: 20px; }
+        #distanceBox { bottom: 20px; left: 20px; }
+
+        .box {
+            display: inline-block;
+            width: 20px; height: 20px;
+            border: 1px solid #000;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        input, textarea, button {
+            width: 100%; margin-bottom: 8px;
+            padding: 6px; box-sizing: border-box;
+        }
+
+        button {
+            background: #4285F4; color: white;
+            border: none; border-radius: 4px;
+        }
+
+        h3, h4 { margin: 5px 0; }
+    </style>
+</head>
+<body>
+
+    <!-- Controls -->
+    <div id="controls">
+        <h3>Enter Route</h3>
+        <input type="text" id="start" placeholder="Start Location">
+        <input type="text" id="destination" placeholder="Destination">
+        <button onclick="calculateRoute()">Find Route</button>
+        <hr>
+        <h4>Submit Feedback</h4>
+        <input type="text" id="place" placeholder="Place Name">
+        <input type="number" id="rating" min="1" max="100" placeholder="Rating (1-100)">
+        <textarea id="comment" placeholder="Your comment"></textarea>
+        <button onclick="submitFeedback()">Submit Feedback</button>
+    </div>
+
+    <!-- Legend -->
+    <div id="legend">
+        <h4>Legend</h4>
+        <div><span class="box" style="background:red;"></span> High Crime Area</div>
+        <div><span class="box" style="background:yellow;"></span> Medium Crime Area</div>
+        <div><span class="box" style="background:green;"></span> Low Crime Area</div>
+        <div><span class="box" style="background:purple;"></span> Alternate Route</div>
+    </div>
+
+    <!-- Distance Box -->
+    <div id="distanceBox">
+        <h4>Distance by Crime Zone</h4>
+        <div id="greenDist">Low (Green): -</div>
+        <div id="yellowDist">Medium (Yellow): -</div>
+        <div id="redDist">High (Red): -</div>
+        <div id="altDist">Alternate Route (Purple): -</div>
+    </div>
+
+    <!-- Map -->
+    <div id="map"></div>
+
+    <!-- Script -->
+    <script>
+        let map, directionsService, directionsRenderer;
+        let polylines = [];
+
+        const crimeColors = { low: "green", medium: "yellow", high: "red" };
+        const simulatedCrimeZones = ["low", "medium", "high", "medium", "low"];
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById("map"), {
+                center: { lat: 17.3850, lng: 78.4867 },
+                zoom: 13
+            });
+
+            directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer({ suppressPolylines: true });
+            directionsRenderer.setMap(map);
+        }
+
+        function calculateRoute() {
+            const start = document.getElementById("start").value;
+            const destination = document.getElementById("destination").value;
+
+            if (!start || !destination) {
+                alert("Please enter both start and destination.");
+                return;
+            }
+
+            clearPolylines();
+
+            const request = {
+                origin: start,
+                destination: destination,
+                travelMode: 'DRIVING',
+                provideRouteAlternatives: true
+            };
+
+            directionsService.route(request, function(result, status) {
+                if (status === 'OK') {
+                    const mainRoute = result.routes[0];
+                    directionsRenderer.setDirections(result);
+
+                    let distances = { low: 0, medium: 0, high: 0 };
+                    mainRoute.legs.forEach(leg => {
+                        leg.steps.forEach((step, i) => {
+                            const path = step.path;
+                            const zone = simulatedCrimeZones[i % simulatedCrimeZones.length];
+                            const color = crimeColors[zone];
+                            const segmentDist = google.maps.geometry.spherical.computeLength(path) / 1000;
+                            distances[zone] += segmentDist;
+
+                            const polyline = new google.maps.Polyline({
+                                path: path,
+                                strokeColor: color,
+                                strokeOpacity: 1.0,
+                                strokeWeight: 6,
+                                map: map
+                            });
+
+                            polylines.push(polyline);
+                        });
+                    });
+
+                    document.getElementById("greenDist").textContent = `Low (Green): ${distances.low.toFixed(2)} km`;
+                    document.getElementById("yellowDist").textContent = `Medium (Yellow): ${distances.medium.toFixed(2)} km`;
+                    document.getElementById("redDist").textContent = `High (Red): ${distances.high.toFixed(2)} km`;
+
+                    if (result.routes[1]) {
+                        let altDistance = 0;
+                        result.routes[1].legs.forEach(leg => {
+                            leg.steps.forEach(step => {
+                                altDistance += step.distance.value;
+                                const polyline = new google.maps.Polyline({
+                                    path: step.path,
+                                    strokeColor: "purple",
+                                    strokeOpacity: 0.7,
+                                    strokeWeight: 6,
+                                    map: map
+                                });
+                                polylines.push(polyline);
+                            });
+                        });
+                        document.getElementById("altDist").textContent = `Alternate Route (Purple): ${(altDistance / 1000).toFixed(2)} km`;
+                    } else {
+                        document.getElementById("altDist").textContent = `Alternate Route (Purple): Not available`;
+                    }
+
+                } else {
+                    alert("Route not found: " + status);
+                }
+            });
+        }
+
+        function clearPolylines() {
+            polylines.forEach(p => p.setMap(null));
+            polylines = [];
+        }
+
+        function submitFeedback() {
+            const place = document.getElementById("place").value;
+            const rating = document.getElementById("rating").value;
+            const comment = document.getElementById("comment").value;
+
+            if (!place || !rating || !comment) {
+                alert("Please complete all feedback fields.");
+                return;
+            }
+
+            alert(`Feedback Submitted:\nPlace: ${place}\nRating: ${rating}/100\nComment: ${comment}`);
+        }
+
+        function makeDraggable(el) {
+            let offsetX = 0, offsetY = 0;
+
+            el.onmousedown = function(e) {
+                offsetX = e.clientX - el.offsetLeft;
+                offsetY = e.clientY - el.offsetTop;
+
+                document.onmousemove = function(e) {
+                    el.style.left = (e.clientX - offsetX) + "px";
+                    el.style.top = (e.clientY - offsetY) + "px";
+                };
+
+                document.onmouseup = function() {
+                    document.onmousemove = null;
+                    document.onmouseup = null;
+                };
+            };
+        }
+
+        window.onload = function() {
+            initMap();
+            makeDraggable(document.getElementById('controls'));
+            makeDraggable(document.getElementById('legend'));
+            makeDraggable(document.getElementById('distanceBox'));
+        };
+    </script>
+</body>
+</html>
